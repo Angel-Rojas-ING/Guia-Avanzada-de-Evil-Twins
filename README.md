@@ -10,6 +10,7 @@ Este repositorio está dirigido a profesionales y estudiantes en el campo de la 
 ### Pre-Requisitos.
 
 1.Necesitas un Compilador de Bash sea Visual Studio o una terminal de Linux
+
 2.Adaptador que soporte modo monitor he injeccion de paquete.
 
 
