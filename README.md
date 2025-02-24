@@ -26,10 +26,10 @@ git clone https://github.com/Angel-Rojas-ING/Guia-Avanzada-de-Evil-Twins.git
 cd Guia-Avanzada-de-Evil-Twins
 ```
 ```
-chmod +x Explicacion.sh
+chmod +x Explicacion_Ejecución.sh
 ```
 ```
-./Explicacion.sh
+./Explicacion_Ejecución.sh
 ```
 
 
